@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html><head>
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+  <title></title>
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="googlebot" content="noindex, nofollow">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+
+  <script type="text/javascript" src="a_data/dummy.js"></script>
+
+    <link rel="stylesheet" type="text/css" href="a_data/result-light.css">
+
+
+  <style id="compiled-css" type="text/css">
+      textarea {
+    width: 500px;
+    min-height: 75px;
+}
+    /* EOS */
+  </style>
+
+  <script id="insert"></script>
+
+
+</head>
+<body>
+
+<br>
+
+Video<br>
+<div id="remoteVideos"></div> <br>
+
+Logs<br>
+<div id="div"></div>
+
+
+<script type="text/javascript">
+
+  let pc = new RTCPeerConnection({
+      iceServers: [
+          {
+              urls: 'stun:stun.l.google.com:19302'
+          }
+          ,
+          {
+              urls: 'turn:164.132.171.182:3478',
+              credential: 'zz4R1iL3Ic7W',
+              username: 'gameon'
+          }
+      ]
+  })
+  let log = msg => {
+      document.getElementById('div').innerHTML += msg + '<br>'
+  }
+  
+  pc.ontrack = function (event) {
+      var el = document.createElement(event.track.kind)
+      el.srcObject = event.streams[0]
+      el.autoplay = true
+      el.controls = true
+      document.getElementById('remoteVideos').appendChild(el)
+  }
+  
+  async function handshake(local_description)
+  {
+      var loc = window.location, ws_uri;
+      if (loc.protocol === "https:") {
+          ws_uri = "wss:";
+      } else {
+          ws_uri = "ws:";
+      }
+      ws_uri += "//" + loc.host + "/webrtc";
+      let ws = new WebSocket(ws_uri)
+      ws.onopen = function(event)
+      {
+          log("websocket opened, sending local description...")
+          try
+          {
+              ws.send("cameras/cam6")
+              ws.send(local_description)
+          }
+          catch(e)
+          {
+              alert(e)
+          }
+      }
+      ws.onmessage = function(event)
+      {
+          try
+          {
+              log("received message, parsing remote description...")
+              pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(atob(event.data))))
+          }
+          catch (e)
+          {
+              alert(e)
+          }    
+      }
+  }
+  
+  pc.oniceconnectionstatechange = e => log("ice connection state change: " + pc.iceConnectionState)
+  pc.onicecandidate = event => {
+      if (event.candidate === null) {
+          log("initiating hadshake...")
+          handshake(btoa(JSON.stringify(pc.localDescription)))
+      }
+  }
+  
+  pc.addTransceiver('video', {'direction': 'recvonly'})
+  pc.createOffer().then(d => pc.setLocalDescription(d)).catch(log)
+  
+  log("setup done...")
+
+</script>
+
+<script>
+  // tell the embed parent frame the height of the content
+  if (window.parent && window.parent.parent){
+    window.parent.parent.postMessage(["resultsFrame", {
+      height: document.body.getBoundingClientRect().height,
+      slug: "z7ms3u5r"
+    }], "*")
+  }
+
+  // always overwrite window.name, in case users try to set it manually
+  window.name = "result"
+</script>
+
+
+
+
+</body></html>
