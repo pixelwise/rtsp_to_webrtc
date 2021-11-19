@@ -123,7 +123,13 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
             {
                 URLs: []string{"stun:stun.l.google.com:19302"},
             },
-        },
+            {
+                URLs: []string{"turn:164.132.171.182:3478"},
+		Username: "gameon",
+		Credential: "lyDdKn/HVrA2B3oC",
+		CredentialType: webrtc.ICECredentialTypePassword,
+            },
+        }
     })
     if err != nil {
         panic(err)
@@ -131,8 +137,8 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
     peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
         fmt.Printf("Connection State has changed %s \n", connectionState.String())
     })
-    peerConnection.OnICECandidate(func(candidate webrtc.ICECandidate) {
-        fmt.Printf("ice candidate %s \n", candidate.String())
+    peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+            fmt.Printf("ice candidate %s \n", candidate)
     })
 
     // Create a video track
