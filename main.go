@@ -131,6 +131,9 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
     peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
         fmt.Printf("Connection State has changed %s \n", connectionState.String())
     })
+    peerConnection.OnICECandidate(func(candidate webrtc.ICECandidate) {
+        fmt.Printf("ice candidate %s \n", candidate.String())
+    })
 
     // Create a video track
     videoTrack, err := webrtc.NewTrackLocalStaticSample(
