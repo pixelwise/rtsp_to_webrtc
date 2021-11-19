@@ -1,0 +1,6 @@
+[submodule "vdk"]
+	path = vdk
+	url = git@github.com:deepch/vdk.git
+[submodule "webrtc"]
+	path = webrtc
+	url = git@github.com:pion/webrtc.git
