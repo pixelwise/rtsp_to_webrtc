@@ -3,22 +3,17 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -31,105 +26,74 @@ import (
 	"github.com/pion/webrtc/v3/pkg/media"
 )
 
-// Allows compressing offer/answer to bypass terminal input limits.
-const compress = false
+func main() {
+    port := flag.Int("p", 40046, "port to listen on")
+    rtsp_prefix := flag.String("webrtc-prefix", "rtsp://localhost:8554/", "prefix to the rtsp address")
+    flag.Parse()
+    log.Printf("port %d", *port)
+    log.Printf("rtsp prefix '%s'", *rtsp_prefix)
+    serve_websocket(*port, *rtsp_prefix)
+}
 
-// MustReadStdin blocks until input is received from stdin
-func MustReadStdin() string {
-    r := bufio.NewReader(os.Stdin)
-
-    var in string
-    for {
-        var err error
-        in, err = r.ReadString('\n')
-        if err != io.EOF {
-            if err != nil {
-                panic(err)
-            }
+func serve_websocket(port int, webrtc_prefix string) {
+     ctx, cancel := context.WithCancel(context.Background())
+     mux := http.NewServeMux()
+     mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+         start_webrtc(w, r, webrtc_prefix)
+     })
+     listener, err := reuseport.Listen("tcp", fmt.Sprintf(":%d", port))
+     if err != nil {
+       panic(err)
+     }
+     defer listener.Close()
+     
+     httpServer := &http.Server{
+         Addr: fmt.Sprintf(":%d", port),
+         Handler: mux,
+         BaseContext: func(_ net.Listener) context.Context { return ctx },
+    }
+    log.Printf("starting server onf port %d", port)
+    go func() {
+        if err := httpServer.Serve(listener); err != http.ErrServerClosed {
+            // it is fine to use Fatal here because it is not main gorutine
+            log.Fatalf("HTTP server Serve: %v", err)
         }
-        in = strings.TrimSpace(in)
-        if len(in) > 0 {
-            break
-        }
+    }()
+
+    signalChan := make(chan os.Signal, 1)
+
+    signal.Notify(
+        signalChan,
+        syscall.SIGHUP,  // kill -SIGHUP XXXX
+        syscall.SIGINT,  // kill -SIGINT XXXX or Ctrl+c
+        syscall.SIGQUIT, // kill -SIGQUIT XXXX
+    )
+
+    <-signalChan
+    log.Print("os.Interrupt - shutting down...\n")
+
+    go func() {
+        <-signalChan
+        log.Fatal("os.Kill - terminating...\n")
+    }()
+
+    gracefullCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancelShutdown()
+
+    if err := httpServer.Shutdown(gracefullCtx); err != nil {
+        log.Printf("shutdown error: %v\n", err)
+        defer os.Exit(1)
+        return
+    } else {
+        log.Printf("gracefully stopped\n")
     }
 
-    fmt.Println("")
+    // manually cancel context if not using httpServer.RegisterOnShutdown(cancel)
+    cancel()
 
-    return in
+    defer os.Exit(0)
+    return
 }
-
-// Encode encodes the input in base64
-// It can optionally zip the input before encoding
-func Encode(obj interface{}) string {
-    b, err := json.Marshal(obj)
-    if err != nil {
-        panic(err)
-    }
-
-    if compress {
-        b = zip(b)
-    }
-
-    return base64.StdEncoding.EncodeToString(b)
-}
-
-// Decode decodes the input from base64
-// It can optionally unzip the input after decoding
-func Decode(in string, obj interface{}) {
-    b, err := base64.StdEncoding.DecodeString(in)
-    if err != nil {
-        panic(err)
-    }
-
-    if compress {
-        b = unzip(b)
-    }
-
-    err = json.Unmarshal(b, obj)
-    if err != nil {
-        panic(err)
-    }
-}
-
-func zip(in []byte) []byte {
-    var b bytes.Buffer
-    gz := gzip.NewWriter(&b)
-    _, err := gz.Write(in)
-    if err != nil {
-        panic(err)
-    }
-    err = gz.Flush()
-    if err != nil {
-        panic(err)
-    }
-    err = gz.Close()
-    if err != nil {
-        panic(err)
-    }
-    return b.Bytes()
-}
-
-func unzip(in []byte) []byte {
-    var b bytes.Buffer
-    _, err := b.Write(in)
-    if err != nil {
-        panic(err)
-    }
-    r, err := gzip.NewReader(&b)
-    if err != nil {
-        panic(err)
-    }
-    res, err := ioutil.ReadAll(r)
-    if err != nil {
-        panic(err)
-    }
-    return res
-}
-
-func check_origin(r *http.Request) bool {
-    return true;
-}
-var upgrader = websocket.Upgrader{CheckOrigin:check_origin}
 
 func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
     log.Printf("starting webrtc...")
@@ -196,22 +160,21 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
     run_stream(rtsp_prefix + source, videoTrack)
 }
 
+func check_origin(r *http.Request) bool {
+    return true;
+}
+
+var upgrader = websocket.Upgrader{CheckOrigin:check_origin}
+
 func handle_offer(peer_connection *webrtc.PeerConnection, offer webrtc.SessionDescription) webrtc.SessionDescription {
-    // Set the remote SessionDescription
     if err := peer_connection.SetRemoteDescription(offer); err != nil {
         panic(err)
     }
-
-    // Create answer
     answer, err := peer_connection.CreateAnswer(nil)
     if err != nil {
         panic(err)
     }
-
-    // Create channel that is blocked until ICE Gathering is complete
     gatherComplete := webrtc.GatheringCompletePromise(peer_connection)
-
-    // Sets the LocalDescription, and starts our UDP listeners
     if err = peer_connection.SetLocalDescription(answer); err != nil {
         panic(err)
     }
@@ -222,20 +185,6 @@ func handle_offer(peer_connection *webrtc.PeerConnection, offer webrtc.SessionDe
     <-gatherComplete
 
     return *peer_connection.LocalDescription()    
-}
-
-func consume_rtcp(rtp_sender *webrtc.RTPSender) {
-    // Read incoming RTCP packets
-    // Before these packets are retuned they are processed by interceptors. For things
-    // like NACK this needs to be called.
-    go func() {
-        rtcpBuf := make([]byte, 1500)
-        for {
-            if _, _, rtcpErr := rtp_sender.Read(rtcpBuf); rtcpErr != nil {
-                return
-            }
-        }
-    }()    
 }
 
 func run_stream(source string, video_track *webrtc.TrackLocalStaticSample) {
@@ -297,71 +246,35 @@ func run_stream(source string, video_track *webrtc.TrackLocalStaticSample) {
     }
 }
 
-func serve_websocket(port int, webrtc_prefix string) {
-     ctx, cancel := context.WithCancel(context.Background())
-     mux := http.NewServeMux()
-     mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-         start_webrtc(w, r, webrtc_prefix)
-     })
-     listener, err := reuseport.Listen("tcp", fmt.Sprintf(":%d", port))
-     if err != nil {
-       panic(err)
-     }
-     defer listener.Close()
-     
-     httpServer := &http.Server{
-         Addr: fmt.Sprintf(":%d", port),
-         Handler: mux,
-         BaseContext: func(_ net.Listener) context.Context { return ctx },
+func Encode(obj interface{}) string {
+    b, err := json.Marshal(obj)
+    if err != nil {
+        panic(err)
     }
-    log.Printf("starting server onf port %d", port)
-    go func() {
-        if err := httpServer.Serve(listener); err != http.ErrServerClosed {
-            // it is fine to use Fatal here because it is not main gorutine
-            log.Fatalf("HTTP server Serve: %v", err)
-        }
-    }()
-
-    signalChan := make(chan os.Signal, 1)
-
-    signal.Notify(
-        signalChan,
-        syscall.SIGHUP,  // kill -SIGHUP XXXX
-        syscall.SIGINT,  // kill -SIGINT XXXX or Ctrl+c
-        syscall.SIGQUIT, // kill -SIGQUIT XXXX
-    )
-
-    <-signalChan
-    log.Print("os.Interrupt - shutting down...\n")
-
-    go func() {
-        <-signalChan
-        log.Fatal("os.Kill - terminating...\n")
-    }()
-
-    gracefullCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancelShutdown()
-
-    if err := httpServer.Shutdown(gracefullCtx); err != nil {
-        log.Printf("shutdown error: %v\n", err)
-        defer os.Exit(1)
-        return
-    } else {
-        log.Printf("gracefully stopped\n")
-    }
-
-    // manually cancel context if not using httpServer.RegisterOnShutdown(cancel)
-    cancel()
-
-    defer os.Exit(0)
-    return
+    return base64.StdEncoding.EncodeToString(b)
 }
 
-func main() {
-    port := flag.Int("p", 40046, "port to listen on")
-    rtsp_prefix := flag.String("webrtc-prefix", "rtsp://localhost:8554/", "prefix to the rtsp address")
-    flag.Parse()
-    log.Printf("port %d", *port)
-    log.Printf("rtsp prefix '%s'", *rtsp_prefix)
-    serve_websocket(*port, *rtsp_prefix)
+func Decode(in string, obj interface{}) {
+    b, err := base64.StdEncoding.DecodeString(in)
+    if err != nil {
+        panic(err)
+    }
+    err = json.Unmarshal(b, obj)
+    if err != nil {
+        panic(err)
+    }
+}
+
+func consume_rtcp(rtp_sender *webrtc.RTPSender) {
+    // Read incoming RTCP packets
+    // Before these packets are retuned they are processed by interceptors. For things
+    // like NACK this needs to be called.
+    go func() {
+        rtcpBuf := make([]byte, 1500)
+        for {
+            if _, _, rtcpErr := rtp_sender.Read(rtcpBuf); rtcpErr != nil {
+                return
+            }
+        }
+    }()    
 }
