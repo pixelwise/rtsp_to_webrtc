@@ -128,8 +128,8 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
 		Username: "gameon",
 		Credential: "lyDdKn/HVrA2B3oC",
 		CredentialType: webrtc.ICECredentialTypePassword,
-            }
-        }
+            },
+        },
     })
     if err != nil {
         panic(err)
