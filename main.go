@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -133,6 +132,34 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
     }
     defer peerConnection.Close()
 
+    peerConnection.OnConnectionStateChange(func(connectionState webrtc.PeerConnectionState) {
+        switch connectionState {
+        case webrtc.PeerConnectionStateFailed:
+            log.Print("connection failed, closing...");
+            if err := peerConnection.Close(); err != nil {
+                log.Print(err)
+            }
+        case webrtc.PeerConnectionStateClosed:
+            log.Print("connection closed");
+        }
+    })
+    peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+        fmt.Printf("ice candidate %s \n", candidate)
+        if candidate == nil {
+            return
+        }
+        candidateString, err := json.Marshal(candidate.ToJSON())
+            if err != nil {
+                panic(err)
+            }
+            if err := websocket.WriteJSON(&websocketMessage{
+                Event: "candidate",
+                Data:  string(candidateString),
+            }); err != nil {
+                panic(err)
+            }
+    })
+
     videoTrack, err := webrtc.NewTrackLocalStaticSample(
         webrtc.RTPCodecCapability{
             MimeType: "video/h264",
@@ -149,34 +176,6 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
     }
     consume_rtcp(rtpSender)
 
-    peerConnection.OnConnectionStateChange(func(connectionState webrtc.PeerConnectionState) {
-        switch connectionState {
-        case webrtc.PeerConnectionStateFailed:
-            log.Print("connection failed, closing...");
-            if err := peerConnection.Close(); err != nil {
-                log.Print(err)
-            }
-        case webrtc.PeerConnectionStateClosed:
-            log.Print("connection closed");
-        }
-    })
-    peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-        if candidate == nil {
-            return
-        }
-        candidateString, err := json.Marshal(candidate.ToJSON())
-            fmt.Printf("ice candidate %s \n", candidate)
-            if err != nil {
-                log.Println(err)
-                return
-            }
-            if writeErr := websocket.WriteJSON(&websocketMessage{
-                Event: "candidate",
-                Data:  string(candidateString),
-            }); writeErr != nil {
-                log.Println(writeErr)
-            }
-    })
     message := &websocketMessage{}
     for {
         _, raw, err := websocket.ReadMessage()
@@ -186,10 +185,13 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
         if err := json.Unmarshal(raw, &message); err != nil {
             panic(err)
         }
+        fmt.Printf("got message %s\n", raw)
         switch message.Event {
         case "open":
+            fmt.Printf("running stream...\n")
             go run_stream(rtsp_prefix + message.Data, videoTrack)
         case "offer":
+            fmt.Printf("handling offer...\n")
             offer := webrtc.SessionDescription{}
             if err := json.Unmarshal([]byte(message.Data), &offer); err != nil {
                 panic(err)
@@ -200,7 +202,10 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
             answer, err := peerConnection.CreateAnswer(nil)
             if err != nil {
                 panic(err)
-            } 
+            }
+            if err = peerConnection.SetLocalDescription(answer); err != nil {
+               panic(err)
+            }
             answerString, err := json.Marshal(answer)
             if err != nil {
                 panic(err)
@@ -212,16 +217,17 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
                 panic(err)
             }
         case "candidate":
+            fmt.Printf("handling candidate\n")
             candidate := webrtc.ICECandidateInit{}
             if err := json.Unmarshal([]byte(message.Data), &candidate); err != nil {
                 panic(err)
             }
             if err := peerConnection.AddICECandidate(candidate); err != nil {
-                log.Println(err)
-                return
+                panic(err)
             }
         }
     }
+    fmt.Printf("done...\n")
 }
 
 func run_stream(source string, video_track *webrtc.TrackLocalStaticSample) {

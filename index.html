@@ -6,13 +6,6 @@
   <meta name="robots" content="noindex, nofollow">
   <meta name="googlebot" content="noindex, nofollow">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-
-
-  <script type="text/javascript" src="a_data/dummy.js"></script>
-
-    <link rel="stylesheet" type="text/css" href="a_data/result-light.css">
-
-
   <style id="compiled-css" type="text/css">
       textarea {
     width: 500px;
@@ -56,6 +49,7 @@ Logs<br>
     }
     
     pc.ontrack = function (event) {
+        log("got track...")
         var el = document.createElement(event.track.kind)
         el.srcObject = event.streams[0]
         el.autoplay = true
@@ -83,9 +77,10 @@ Logs<br>
             }
         }
         pc.addTransceiver('video', {'direction': 'recvonly'})
-        offer = await pc.createOffer()
-        pc.setLocalDescription(offer)
-        ws.send(JSON.stringify({event: 'offer', data: JSON.stringify(offer)}))
+        pc.createOffer().then(function(offer){
+            pc.setLocalDescription(offer)
+            ws.send(JSON.stringify({event: 'offer', data: JSON.stringify(offer)}))
+        }).catch(log)
     }
     ws.onmessage = function(event)
     {
@@ -104,11 +99,13 @@ Logs<br>
                 ws.send(JSON.stringify({event: 'open', data: 'cameras/cam6'}))
                 return
             case 'candidate':
-            let candidate = JSON.parse(msg.data)
-                if (!candidate) {
-                    return console.log('failed to parse candidate')
+                let candidate = JSON.parse(msg.data)
+                if (candidate) {
+                    log("received candidate")
+                    pc.addIceCandidate(candidate)
+                } else {
+                    log('failed to parse candidate')
                 }
-                pc.addIceCandidate(candidate)
                 return
         }
     }
@@ -116,8 +113,6 @@ Logs<br>
         log("websocket error: " + event.data)
     }    
     
-    handshake(pc.localDescription)
-
     log("setup done...")
 
 </script>
