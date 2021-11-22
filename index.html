@@ -38,90 +38,87 @@ Logs<br>
 
 <script type="text/javascript">
 
-  let pc = new RTCPeerConnection({
-      iceServers: [
-          {
-              urls: 'stun:stun.l.google.com:19302'
-          }
-          ,
-          {
-              urls: 'turn:164.132.171.182:3478',
-              credential: 'zz4R1iL3Ic7W',
-              username: 'gameon'
-          }
-      ]
-  })
-  let log = msg => {
-      document.getElementById('div').innerHTML += msg + '<br>'
-  }
-  
-  pc.ontrack = function (event) {
-      var el = document.createElement(event.track.kind)
-      el.srcObject = event.streams[0]
-      el.autoplay = true
-      el.controls = true
-      document.getElementById('remoteVideos').appendChild(el)
-  }
-  
-  async function handshake(offer)
-  {
-      var loc = window.location, ws_uri;
-      if (loc.protocol === "https:") {
-          ws_uri = "wss:";
-      } else {
-          ws_uri = "ws:";
-      }
-      ws_uri += "//" + loc.host + "/webrtc";
-      let ws = new WebSocket(ws_uri)
-      ws.onopen = function(event)
-      {
-          log("websocket opened, sending local description...")
-          ws.send(JSON.stringify({event: 'offer', data: JSON.stringify(offer)}))
-      }
-      ws.onmessage = function(event)
-      {
-          let msg = JSON.parse(event.data)
-          if (!msg) {
-              return console.log('failed to parse msg')
-          }
-          switch (msg.event) {
-              case 'answer':
-                  let answer = JSON.parse(msg.data)
-                  if (!answer) {
-                      return console.log('failed to parse answer')
-                  }
-                  log("received answer...")
-                  pc.setRemoteDescription(answer)
-                  ws.send(JSON.stringify({event: 'open', data: 'cameras/cam6'}))
-                  return
-              case 'candidate':
-              let candidate = JSON.parse(msg.data)
-                  if (!candidate) {
-                      return console.log('failed to parse candidate')
-                  }
-                  pc.addIceCandidate(candidate)
-                  return
-          }
-      }
-      ws.onerror = function(event) {
-          log("websocket error: " + event.data)
-      }
-  }
-  
-  pc.oniceconnectionstatechange = e => log("ice connection state change: " + pc.iceConnectionState)
-  pc.onicecandidate = event => {
-      if (event && event.candidate) {
-          log("sending candidate...")
-          ws.send(JSON.stringify({event: 'candidate', data: JSON.stringify(event.candidate)}))
-      }
-  }
-  
-  pc.addTransceiver('video', {'direction': 'recvonly'})
-  pc.createOffer().then(d => pc.setLocalDescription(d)).catch(log)
-  
-  handshake(pc.localDescription)
+    let pc = new RTCPeerConnection({
+        iceServers: [
+            {
+                urls: 'stun:stun.l.google.com:19302'
+            }
+            ,
+            {
+                urls: 'turn:164.132.171.182:3478',
+                credential: 'zz4R1iL3Ic7W',
+                username: 'gameon'
+            }
+        ]
+    })
+    let log = msg => {
+        document.getElementById('div').innerHTML += msg + '<br>'
+    }
+    
+    pc.ontrack = function (event) {
+        var el = document.createElement(event.track.kind)
+        el.srcObject = event.streams[0]
+        el.autoplay = true
+        el.controls = true
+        document.getElementById('remoteVideos').appendChild(el)
+    }
+    
+    pc.oniceconnectionstatechange = e => log("ice connection state change: " + pc.iceConnectionState)
 
-  log("setup done...")
+    var loc = window.location, ws_uri;
+    if (loc.protocol === "https:") {
+        ws_uri = "wss:";
+    } else {
+        ws_uri = "ws:";
+    }
+    ws_uri += "//" + loc.host + "/webrtc";
+    let ws = new WebSocket(ws_uri)
+    ws.onopen = function(event)
+    {
+        log("websocket opened, sending local description...")
+        pc.onicecandidate = event => {
+            if (event && event.candidate) {
+                log("sending candidate...")
+                ws.send(JSON.stringify({event: 'candidate', data: JSON.stringify(event.candidate)}))
+            }
+        }
+        pc.addTransceiver('video', {'direction': 'recvonly'})
+        offer = await pc.createOffer()
+        pc.setLocalDescription(offer)
+        ws.send(JSON.stringify({event: 'offer', data: JSON.stringify(offer)}))
+    }
+    ws.onmessage = function(event)
+    {
+        let msg = JSON.parse(event.data)
+        if (!msg) {
+            return console.log('failed to parse msg')
+        }
+        switch (msg.event) {
+            case 'answer':
+                let answer = JSON.parse(msg.data)
+                if (!answer) {
+                    return console.log('failed to parse answer')
+                }
+                log("received answer...")
+                pc.setRemoteDescription(answer)
+                ws.send(JSON.stringify({event: 'open', data: 'cameras/cam6'}))
+                return
+            case 'candidate':
+            let candidate = JSON.parse(msg.data)
+                if (!candidate) {
+                    return console.log('failed to parse candidate')
+                }
+                pc.addIceCandidate(candidate)
+                return
+        }
+    }
+    ws.onerror = function(event) {
+        log("websocket error: " + event.data)
+    }    
+    
+    handshake(pc.localDescription)
+
+    log("setup done...")
 
 </script>
 
