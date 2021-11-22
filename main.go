@@ -35,6 +35,11 @@ func main() {
     serve_websocket(*port, *rtsp_prefix)
 }
 
+type websocketMessage struct {
+	Event string `json:"event"`
+	Data  string `json:"data"`
+}
+
 func serve_websocket(port int, webrtc_prefix string) {
      ctx, cancel := context.WithCancel(context.Background())
      mux := http.NewServeMux()
@@ -95,7 +100,14 @@ func serve_websocket(port int, webrtc_prefix string) {
     return
 }
 
+func check_origin(r *http.Request) bool {
+    return true;
+}
+
+var upgrader = websocket.Upgrader{CheckOrigin:check_origin}
+
 func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
+
     log.Printf("starting webrtc...")
     websocket, err := upgrader.Upgrade(w, r, nil)
     if err != nil {
@@ -103,21 +115,6 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
     }
     defer websocket.Close()
     
-    mt, message1, err := websocket.ReadMessage()
-    if err != nil {
-        panic(err)
-    }
-    mt, message2, err := websocket.ReadMessage()
-    if err != nil {
-        panic(err)
-    }
-    log.Printf("received message")
-    source := string(message1)
-    log.Printf("source: '" + source + "'")
-    offer := webrtc.SessionDescription{}
-    Decode(string(message2), &offer)
-    log.Printf("offer:\n%s", offer)
-
     peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
         ICEServers: []webrtc.ICEServer{
             {
@@ -134,14 +131,8 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
     if err != nil {
         panic(err)
     }
-    peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-        fmt.Printf("Connection State has changed %s \n", connectionState.String())
-    })
-    peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
-            fmt.Printf("ice candidate %s \n", candidate)
-    })
+    defer peerConnection.Close()
 
-    // Create a video track
     videoTrack, err := webrtc.NewTrackLocalStaticSample(
         webrtc.RTPCodecCapability{
             MimeType: "video/h264",
@@ -156,44 +147,81 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
     if err != nil {
         panic(err)
     }
-
     consume_rtcp(rtpSender)
 
-    local_description := handle_offer(peerConnection, offer)
-    log.Printf("local description:\n%s", local_description.SDP)
-    if err = websocket.WriteMessage(mt, []byte(Encode(local_description))); err != nil {
-        panic(err)
+    peerConnection.OnConnectionStateChange(func(connectionState webrtc.PeerConnectionState) {
+        switch connectionState {
+        case webrtc.PeerConnectionStateFailed:
+            log.Print("connection failed, closing...");
+            if err := peerConnection.Close(); err != nil {
+                log.Print(err)
+            }
+        case webrtc.PeerConnectionStateClosed:
+            log.Print("connection closed");
+        }
+    })
+    peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+        if candidate == nil {
+            return
+        }
+        candidateString, err := json.Marshal(candidate.ToJSON())
+            fmt.Printf("ice candidate %s \n", candidate)
+            if err != nil {
+                log.Println(err)
+                return
+            }
+            if writeErr := websocket.WriteJSON(&websocketMessage{
+                Event: "candidate",
+                Data:  string(candidateString),
+            }); writeErr != nil {
+                log.Println(writeErr)
+            }
+    })
+    message := &websocketMessage{}
+    for {
+        _, raw, err := websocket.ReadMessage()
+        if err != nil {
+            panic(err)
+        } 
+        if err := json.Unmarshal(raw, &message); err != nil {
+            panic(err)
+        }
+        switch message.Event {
+        case "open":
+            go run_stream(rtsp_prefix + message.Data, videoTrack)
+        case "offer":
+            offer := webrtc.SessionDescription{}
+            if err := json.Unmarshal([]byte(message.Data), &offer); err != nil {
+                panic(err)
+            }
+            if err := peerConnection.SetRemoteDescription(offer); err != nil {
+                panic(err)
+            }
+            answer, err := peerConnection.CreateAnswer(nil)
+            if err != nil {
+                panic(err)
+            } 
+            answerString, err := json.Marshal(answer)
+            if err != nil {
+                panic(err)
+            }
+            if err = websocket.WriteJSON(&websocketMessage{
+                Event: "answer",
+                Data:  string(answerString),
+            }); err != nil {
+                panic(err)
+            }
+        case "candidate":
+            candidate := webrtc.ICECandidateInit{}
+            if err := json.Unmarshal([]byte(message.Data), &candidate); err != nil {
+                panic(err)
+            }
+            if err := peerConnection.AddICECandidate(candidate); err != nil {
+                log.Println(err)
+                return
+            }
+        }
     }
-    log.Printf("wrote message")
-
-    run_stream(rtsp_prefix + source, videoTrack)
-}
-
-func check_origin(r *http.Request) bool {
-    return true;
-}
-
-var upgrader = websocket.Upgrader{CheckOrigin:check_origin}
-
-func handle_offer(peer_connection *webrtc.PeerConnection, offer webrtc.SessionDescription) webrtc.SessionDescription {
-    if err := peer_connection.SetRemoteDescription(offer); err != nil {
-        panic(err)
-    }
-    answer, err := peer_connection.CreateAnswer(nil)
-    if err != nil {
-        panic(err)
-    }
-    gatherComplete := webrtc.GatheringCompletePromise(peer_connection)
-    if err = peer_connection.SetLocalDescription(answer); err != nil {
-        panic(err)
-    }
-
-    // Block until ICE Gathering is complete, disabling trickle ICE
-    // we do this because we only can exchange one signaling message
-    // in a production application you should exchange ICE Candidates via OnICECandidate
-    <-gatherComplete
-
-    return *peer_connection.LocalDescription()    
 }
 
 func run_stream(source string, video_track *webrtc.TrackLocalStaticSample) {
@@ -252,25 +280,6 @@ func run_stream(source string, video_track *webrtc.TrackLocalStaticSample) {
 
     if err = session.Close(); err != nil {
         log.Println("session Close error", err)
-    }
-}
-
-func Encode(obj interface{}) string {
-    b, err := json.Marshal(obj)
-    if err != nil {
-        panic(err)
-    }
-    return base64.StdEncoding.EncodeToString(b)
-}
-
-func Decode(in string, obj interface{}) {
-    b, err := base64.StdEncoding.DecodeString(in)
-    if err != nil {
-        panic(err)
-    }
-    err = json.Unmarshal(b, obj)
-    if err != nil {
-        panic(err)
     }
 }
 

@@ -63,7 +63,7 @@ Logs<br>
       document.getElementById('remoteVideos').appendChild(el)
   }
   
-  async function handshake(local_description)
+  async function handshake(offer)
   {
       var loc = window.location, ws_uri;
       if (loc.protocol === "https:") {
@@ -76,41 +76,51 @@ Logs<br>
       ws.onopen = function(event)
       {
           log("websocket opened, sending local description...")
-          try
-          {
-              ws.send("cameras/cam6")
-              ws.send(local_description)
-          }
-          catch(e)
-          {
-              alert(e)
-          }
+          ws.send(JSON.stringify({event: 'offer', data: JSON.stringify(offer)}))
       }
       ws.onmessage = function(event)
       {
-          try
-          {
-              log("received message, parsing remote description...")
-              pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(atob(event.data))))
+          let msg = JSON.parse(event.data)
+          if (!msg) {
+              return console.log('failed to parse msg')
           }
-          catch (e)
-          {
-              alert(e)
-          }    
+          switch (msg.event) {
+              case 'answer':
+                  let answer = JSON.parse(msg.data)
+                  if (!answer) {
+                      return console.log('failed to parse answer')
+                  }
+                  log("received answer...")
+                  pc.setRemoteDescription(answer)
+                  ws.send(JSON.stringify({event: 'open', data: 'cameras/cam6'}))
+                  return
+              case 'candidate':
+              let candidate = JSON.parse(msg.data)
+                  if (!candidate) {
+                      return console.log('failed to parse candidate')
+                  }
+                  pc.addIceCandidate(candidate)
+                  return
+          }
+      }
+      ws.onerror = function(event) {
+          log("websocket error: " + event.data)
       }
   }
   
   pc.oniceconnectionstatechange = e => log("ice connection state change: " + pc.iceConnectionState)
   pc.onicecandidate = event => {
-      if (event.candidate === null) {
-          log("initiating hadshake...")
-          handshake(btoa(JSON.stringify(pc.localDescription)))
+      if (event && event.candidate) {
+          log("sending candidate...")
+          ws.send(JSON.stringify({event: 'candidate', data: JSON.stringify(event.candidate)}))
       }
   }
   
   pc.addTransceiver('video', {'direction': 'recvonly'})
   pc.createOffer().then(d => pc.setLocalDescription(d)).catch(log)
   
+  handshake(pc.localDescription)
+
   log("setup done...")
 
 </script>
