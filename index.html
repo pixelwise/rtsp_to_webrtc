@@ -72,7 +72,7 @@ Logs<br>
         log("websocket opened, sending local description...")
         pc.onicecandidate = event => {
             if (event && event.candidate) {
-                log("sending candidate...")
+                log("sending candidate: " + JSON.stringify(event.candidate))
                 ws.send(JSON.stringify({event: 'candidate', data: JSON.stringify(event.candidate)}))
             }
         }
@@ -101,7 +101,7 @@ Logs<br>
             case 'candidate':
                 let candidate = JSON.parse(msg.data)
                 if (candidate) {
-                    log("received candidate")
+                    log("received candidate: " + msg.data)
                     pc.addIceCandidate(candidate)
                 } else {
                     log('failed to parse candidate')
