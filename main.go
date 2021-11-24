@@ -117,12 +117,9 @@ func start_webrtc(w http.ResponseWriter, r *http.Request, rtsp_prefix string) {
     peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
         ICEServers: []webrtc.ICEServer{
             {
-                URLs: []string{"stun:stun.l.google.com:19302"},
-            },
-            {
-                URLs: []string{"turn:164.132.171.182:3478"},
+                URLs: []string{"turn:cloud.game-on.eu?transport=tcp"},
 		Username: "gameon",
-		Credential: "lyDdKn/HVrA2B3oC",
+		Credential: "Gk4Al82TBs0bRjmr",
 		CredentialType: webrtc.ICECredentialTypePassword,
             },
         },
